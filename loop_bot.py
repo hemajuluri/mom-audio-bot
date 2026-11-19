@@ -21,6 +21,8 @@ import asyncio
 import logging
 import subprocess
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -40,10 +42,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MomAudioBot")
 
-BOT_TOKEN = os.environ.get(
-    "BOT_TOKEN",
-    "9108487527:AAHTWrqxCpr54eL8KUt6msQL6upKBiBnlgA",
-)
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    # Check if .env file exists locally
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith("BOT_TOKEN="):
+                    BOT_TOKEN = line.strip().split("=", 1)[1]
+                    break
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is required. Set BOT_TOKEN environment variable or put it in .env")
 
 ALLOWED_USER_IDS = {
     int(x.strip())
@@ -53,6 +64,28 @@ ALLOWED_USER_IDS = {
 
 MAX_LOOPS = 50
 MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Responds to Fly.io or Render HTTP health checks."""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("🌸 Mom's Audio Bot is Live and Running 24/7 on Fly.io!\n".encode("utf-8"))
+
+    def log_message(self, format, *args):
+        pass  # Quiet logging
+
+
+def start_health_check_server(port: int = 8080):
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"Health check HTTP server listening on 0.0.0.0:{port}")
+    except Exception as e:
+        logger.warning(f"Could not start HTTP server on port {port}: {e}")
 
 
 def get_binary_path(name: str) -> str:
@@ -821,6 +854,10 @@ async def handle_typed_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     logger.info("Starting Mom's Audio Looper & Shloka Splitter Bot...")
+
+    # Start health check server on port 8080 for Fly.io
+    port = int(os.environ.get("PORT", "8080"))
+    start_health_check_server(port)
 
     request = HTTPXRequest(
         connection_pool_size=10,
